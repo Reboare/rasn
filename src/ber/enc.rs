@@ -159,6 +159,12 @@ impl Encoder {
         self.append_byte_or_bytes(ident_bytes);
         self.encode_length(Identifier::from_tag(tag, false), value.len(), value);
     }
+
+    fn encode_constructed(&mut self, tag: Tag, value: &[u8]) {
+        let ident_bytes = self.encode_identifier(Identifier::from_tag(tag, true));
+        self.append_byte_or_bytes(ident_bytes);
+        self.encode_length(Identifier::from_tag(tag, true), value.len(), value);
+    }
 }
 
 impl crate::Encoder for Encoder {
@@ -263,7 +269,7 @@ impl crate::Encoder for Encoder {
             value.encode(&mut sequence_encoder)?;
         }
 
-        Ok(self.encode_value(tag, &sequence_encoder.output))
+        Ok(self.encode_constructed(tag, &sequence_encoder.output))
     }
 
     fn encode_explicit_prefix<V: Encode>(
@@ -285,7 +291,7 @@ impl crate::Encoder for Encoder {
 
         (encoder_scope)(&mut encoder)?;
 
-        Ok(self.encode_value(tag, &encoder.output))
+        Ok(self.encode_constructed(tag, &encoder.output))
     }
 }
 

@@ -199,7 +199,8 @@ impl<T: crate::types::AsnType, V: Encode> Encode for types::Implicit<T, V> {
 
 impl<T: crate::types::AsnType, V: Encode> Encode for types::Explicit<T, V> {
     fn encode_with_tag<EN: Encoder>(&self, encoder: &mut EN, tag: Tag) -> Result<(), EN::Error> {
-        encoder.encode_explicit_prefix(tag, &self.value).map(drop)
+        let k = encoder.encode_explicit_prefix(tag, &self.value);
+        k.map(drop)
     }
 }
 
