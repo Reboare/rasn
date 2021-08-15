@@ -1,23 +1,28 @@
 //! Generic ASN.1 encoding framework.
 
-use crate::{tag::Tag, types};
+use crate::types::{self, AsnType, Tag};
 
 pub use rasn_derive::Encode;
 
 /// A **data type** that can be encoded to a ASN.1 data format.
-pub trait Encode: types::AsnType {
+pub trait Encode: AsnType {
     /// Encodes `self`'s data into the given `Encoder`.
     ///
     /// **Note for implementors** You typically do not need to implement this.
     /// The default implementation will call `Encode::encode_with_tag` with
     /// your types associated `AsnType::TAG`. You should only ever need to
     /// implement this if you have a type that *cannot* be implicitly tagged,
-    /// such as a `CHOICE` type.
+    /// such as a `CHOICE` type, in which case you want to implement encoding
+    /// in `encode`.
     fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), E::Error> {
         self.encode_with_tag(encoder, Self::TAG)
     }
 
-    /// Encode this value implicitly tagged with `tag` into the given `Decoder`.
+    /// Encode this value with `tag` into the given `Encoder`.
+    ///
+    /// **Note** For `CHOICE` and other types that cannot be implicitly tagged
+    /// this will **explicitly tag** the value, for all other types, it will
+    /// **implicitly** tag the value.
     fn encode_with_tag<E: Encoder>(&self, encoder: &mut E, tag: Tag) -> Result<(), E::Error>;
 }
 
@@ -84,8 +89,14 @@ pub trait Encoder {
 }
 
 /// A generic error that occurred while trying to encode ASN.1.
-pub trait Error {
+pub trait Error: core::fmt::Display {
     fn custom<D: core::fmt::Display>(msg: D) -> Self;
+}
+
+impl Error for core::convert::Infallible {
+    fn custom<D: core::fmt::Display>(msg: D) -> Self {
+        core::panic!("Infallible error! {}", msg)
+    }
 }
 
 impl Encode for () {
@@ -173,6 +184,12 @@ impl Encode for types::ObjectIdentifier {
     }
 }
 
+impl Encode for types::Oid {
+    fn encode_with_tag<E: Encoder>(&self, encoder: &mut E, tag: Tag) -> Result<(), E::Error> {
+        encoder.encode_object_identifier(tag, self).map(drop)
+    }
+}
+
 impl Encode for types::UtcTime {
     fn encode_with_tag<E: Encoder>(&self, encoder: &mut E, tag: Tag) -> Result<(), E::Error> {
         encoder.encode_utc_time(tag, self).map(drop)
@@ -185,35 +202,26 @@ impl Encode for types::GeneralizedTime {
     }
 }
 
-impl<E: Encode> Encode for types::SequenceOf<E> {
+impl<E: Encode> Encode for alloc::vec::Vec<E> {
     fn encode_with_tag<EN: Encoder>(&self, encoder: &mut EN, tag: Tag) -> Result<(), EN::Error> {
         encoder.encode_sequence_of(tag, self).map(drop)
     }
 }
 
-impl<T: crate::types::AsnType, V: Encode> Encode for types::Implicit<T, V> {
+impl<E: Encode, const N: usize> Encode for [E; N] {
+    fn encode_with_tag<EN: Encoder>(&self, encoder: &mut EN, tag: Tag) -> Result<(), EN::Error> {
+        encoder.encode_sequence_of(tag, self).map(drop)
+    }
+}
+
+impl<T: AsnType, V: Encode> Encode for types::Implicit<T, V> {
     fn encode_with_tag<EN: Encoder>(&self, encoder: &mut EN, tag: Tag) -> Result<(), EN::Error> {
         V::encode_with_tag(&self.value, encoder, tag).map(drop)
     }
 }
 
-impl<T: crate::types::AsnType, V: Encode> Encode for types::Explicit<T, V> {
+impl<T: AsnType, V: Encode> Encode for types::Explicit<T, V> {
     fn encode_with_tag<EN: Encoder>(&self, encoder: &mut EN, tag: Tag) -> Result<(), EN::Error> {
-        let k = encoder.encode_explicit_prefix(tag, &self.value);
-        k.map(drop)
-    }
-}
-
-impl Encode for alloc::collections::BTreeMap<Tag, types::Open> {
-    fn encode_with_tag<EN: Encoder>(&self, encoder: &mut EN, tag: Tag) -> Result<(), EN::Error> {
-        encoder
-            .encode_sequence(tag, |encoder| {
-                for (tag, value) in self {
-                    <_>::encode_with_tag(value, encoder, *tag)?;
-                }
-
-                Ok(())
-            })
-            .map(drop)
+        encoder.encode_explicit_prefix(tag, &self.value).map(drop)
     }
 }

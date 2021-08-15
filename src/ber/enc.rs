@@ -4,7 +4,14 @@ mod error;
 use alloc::{borrow::ToOwned, collections::VecDeque, vec::Vec};
 
 use super::Identifier;
-use crate::{tag::Tag, types, Encode};
+use crate::{
+    types::{
+        self,
+        oid::{MAX_OID_FIRST_OCTET, MAX_OID_SECOND_OCTET},
+        Tag,
+    },
+    Encode,
+};
 
 pub use config::EncoderOptions;
 pub use error::Error;
@@ -56,6 +63,28 @@ impl Encoder {
 
             if let Some(last) = buffer.last_mut() {
                 *last &= 0x7f;
+            }
+        }
+    }
+
+    pub(super) fn encode_as_base128(&self, number: u32, buffer: &mut Vec<u8>) {
+        const WIDTH: u8 = 7;
+        const SEVEN_BITS: u8 = 0x7F;
+        const EIGHTH_BIT: u8 = 0x80;
+
+        if number < EIGHTH_BIT as u32 {
+            buffer.push(number as u8);
+        } else {
+            let mut n: u8;
+            let mut bits_left = 35;
+            let mut cont = false;
+            while bits_left > 0 {
+                bits_left -= WIDTH;
+                n = ((number >> bits_left) as u8) & SEVEN_BITS;
+                if n > 0 || cont {
+                    buffer.push(if bits_left > 0 { EIGHTH_BIT } else { 0 } | (n & SEVEN_BITS));
+                    cont = true;
+                }
             }
         }
     }
@@ -183,7 +212,7 @@ impl crate::Encoder for Encoder {
         if value.not_any() {
             Ok(self.encode_value(tag, &[]))
         } else {
-            let bytes = value.as_slice().to_owned();
+            let bytes = value.as_raw_slice().to_owned();
             let mut deque = VecDeque::from(bytes);
             while deque.back().map_or(false, |i| *i == 0) {
                 deque.pop_back();
@@ -221,14 +250,14 @@ impl crate::Encoder for Encoder {
         let first = oid[0];
         let second = oid[1];
 
-        if first > 1 {
+        if first > MAX_OID_FIRST_OCTET || second > MAX_OID_SECOND_OCTET {
             return Err(error::Error::InvalidObjectIdentifier);
         }
 
-        self.encode_seven_bit_integer((first * 40) + second, &mut bytes);
+        self.encode_seven_bit_integer((first * (MAX_OID_SECOND_OCTET + 1)) + second, &mut bytes);
 
         for component in oid.iter().skip(2) {
-            self.encode_seven_bit_integer(*component, &mut bytes);
+            self.encode_as_base128(*component, &mut bytes);
         }
 
         Ok(self.encode_value(tag, &bytes))
@@ -277,10 +306,10 @@ impl crate::Encoder for Encoder {
         tag: Tag,
         value: &V,
     ) -> Result<Self::Ok, Self::Error> {
-        self.encode_sequence(tag, |sequence| {
-            value.encode(sequence)?;
-            Ok(())
-        })
+        let mut encoder = Self::new(self.config);
+        value.encode(&mut encoder)?;
+
+        Ok(self.encode_value(tag, &encoder.output))
     }
 
     fn encode_sequence<F>(&mut self, tag: Tag, encoder_scope: F) -> Result<Self::Ok, Self::Error>
@@ -298,6 +327,13 @@ impl crate::Encoder for Encoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
+
+    #[derive(Clone, Copy, Hash, Debug, PartialEq)]
+    struct C0;
+    impl crate::AsnType for C0 {
+        const TAG: Tag = Tag::new(crate::types::Class::Context, 0);
+    }
 
     #[test]
     fn bit_string() {
@@ -321,14 +357,14 @@ mod tests {
         assert_eq!(
             &[0xFF, 0x7F,][..],
             ident_to_bytes(Identifier::from_tag(
-                Tag::new(crate::tag::Class::Private, 127),
+                Tag::new(crate::types::Class::Private, 127),
                 true,
             ))
         );
         assert_eq!(
             &[0b1101_1111, 0xFF, 0xFF, 0x3][..],
             ident_to_bytes(Identifier::from_tag(
-                Tag::new(crate::tag::Class::Private, 65535),
+                Tag::new(crate::types::Class::Private, 65535),
                 false,
             ))
         );
@@ -336,16 +372,61 @@ mod tests {
 
     #[test]
     fn explicit_empty_tag() {
-        use crate::{tag::Class, types::Explicit, AsnType, Tag};
-
-        struct C0;
-        impl AsnType for C0 {
-            const TAG: Tag = Tag::new(Class::Context, 0);
-        }
+        use crate::types::Explicit;
 
         assert_eq!(
             &[0x80, 0],
             &*crate::ber::encode(&<Explicit<C0, _>>::new(None::<()>)).unwrap()
         );
+    }
+
+    #[test]
+    fn encoding_oid() {
+        fn oid_to_bytes(oid: &[u32]) -> Vec<u8> {
+            use crate::Encoder;
+            let mut enc = self::Encoder::new(EncoderOptions::ber());
+            enc.encode_object_identifier(Tag::OBJECT_IDENTIFIER, oid)
+                .unwrap();
+            enc.output
+        }
+
+        // example from https://stackoverflow.com/questions/5929050/how-does-asn-1-encode-an-object-identifier
+        assert_eq!(
+            &vec![0x06, 0x08, 0x2b, 0x06, 0x01, 0x05, 0x05, 0x07, 0x30, 0x01],
+            &oid_to_bytes(&[1, 3, 6, 1, 5, 5, 7, 48, 1])
+        );
+
+        // example from https://docs.microsoft.com/en-us/windows/win32/seccertenroll/about-object-identifier
+        assert_eq!(
+            &vec![0x06, 0x09, 0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x15, 0x14],
+            &oid_to_bytes(&[1, 3, 6, 1, 4, 1, 311, 21, 20])
+        );
+
+        // commonName (X.520 DN component)
+        assert_eq!(
+            &vec![0x06, 0x03, 0x55, 0x04, 0x03],
+            &oid_to_bytes(&[2, 5, 4, 3])
+        );
+    }
+
+    #[test]
+    fn base128_test() {
+        fn encode(n: u32) -> Vec<u8> {
+            let enc = self::Encoder::new(EncoderOptions::ber());
+            let mut buffer: Vec<u8> = vec![];
+            enc.encode_as_base128(n, &mut buffer);
+            buffer
+        }
+
+        assert_eq!(&vec![0x0], &encode(0x0));
+        assert_eq!(&vec![0x7F], &encode(0x7F));
+        assert_eq!(&vec![0x81, 0x00], &encode(0x80));
+        assert_eq!(&vec![0xC0, 0x00], &encode(0x2000));
+        assert_eq!(&vec![0xFF, 0x7F], &encode(0x3FFF));
+        assert_eq!(&vec![0x81, 0x80, 0x00], &encode(0x4000));
+        assert_eq!(&vec![0xFF, 0xFF, 0x7F], &encode(0x001FFFFF));
+        assert_eq!(&vec![0x81, 0x80, 0x80, 0x00], &encode(0x00200000));
+        assert_eq!(&vec![0xC0, 0x80, 0x80, 0x00], &encode(0x08000000));
+        assert_eq!(&vec![0xFF, 0xFF, 0xFF, 0x7F], &encode(0x0FFFFFFF));
     }
 }

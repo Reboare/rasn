@@ -28,13 +28,15 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
 
-    use crate::{
-        tag::{Class, Tag},
-        types::*,
-        AsnType,
-    };
+    use crate::types::*;
 
     use super::*;
+
+    #[derive(Clone, Copy, Hash, Debug, PartialEq)]
+    struct C0;
+    impl AsnType for C0 {
+        const TAG: Tag = Tag::new(Class::Context, 0);
+    }
 
     #[test]
     fn null() {
@@ -135,10 +137,8 @@ mod tests {
 
         assert_eq!(iso.clone(), decode(&encode(&iso).unwrap()).unwrap());
         assert_eq!(us_ansi.clone(), decode(&encode(&us_ansi).unwrap()).unwrap());
-        let bytes = encode(&pkcs).unwrap();
-        assert_eq!(pkcs.clone(), decode(&bytes).unwrap());
-
         assert_eq!(rsa.clone(), decode(&encode(&rsa).unwrap()).unwrap());
+        assert_eq!(pkcs.clone(), decode(&encode(&pkcs).unwrap()).unwrap());
         assert_eq!(random.clone(), decode(&encode(&random).unwrap()).unwrap());
     }
 
@@ -157,12 +157,6 @@ mod tests {
 
     #[test]
     fn implicit_prefix() {
-        #[derive(Debug, PartialEq)]
-        struct C0;
-        impl AsnType for C0 {
-            const TAG: Tag = Tag::new(Class::Context, 0);
-        }
-
         type MyInteger = Implicit<C0, u64>;
 
         let new_int = MyInteger::new(5);
@@ -172,12 +166,6 @@ mod tests {
 
     #[test]
     fn explicit_prefix() {
-        #[derive(Debug, PartialEq)]
-        struct C0;
-        impl AsnType for C0 {
-            const TAG: Tag = Tag::new(Class::Context, 0);
-        }
-
         type MyInteger = Explicit<C0, u64>;
 
         let new_int = MyInteger::new(5);
@@ -187,18 +175,25 @@ mod tests {
 
     #[test]
     fn explicit_empty_tag() {
-        use crate::{tag::Class, types::Explicit, AsnType, Tag};
+        use crate::types::Explicit;
+        type EmptyTag = Explicit<C0, Option<()>>;
 
-        #[derive(Debug, PartialEq)]
-        struct C0;
-        impl AsnType for C0 {
-            const TAG: Tag = Tag::new(Class::Context, 0);
-        }
-
-        let value = <Explicit<C0, _>>::new(None::<()>);
+        let value = EmptyTag::new(None::<()>);
         let data = &[0x80, 0][..];
 
         assert_eq!(data, &*crate::ber::encode(&value).unwrap());
-        assert_eq!(value, crate::ber::decode::<Explicit<C0, _>>(data).unwrap());
+        assert_eq!(value, crate::ber::decode::<EmptyTag>(data).unwrap());
+    }
+
+    #[test]
+    fn implicit_tagged_constructed() {
+        use crate::types::Implicit;
+        type ImpVec = Implicit<C0, Vec<i32>>;
+
+        let value = ImpVec::new(vec![1, 2]);
+        let data = &[0xA0, 6, 2, 1, 1, 2, 1, 2][..];
+
+        assert_eq!(data, &*crate::ber::encode(&value).unwrap());
+        assert_eq!(value, crate::ber::decode::<ImpVec>(data).unwrap());
     }
 }

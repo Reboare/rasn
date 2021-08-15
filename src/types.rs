@@ -4,21 +4,25 @@
 //! ASN.1's terminology.
 
 mod instance;
-mod oid;
+pub(crate) mod oid;
 mod open;
+mod prefix;
+mod tag;
 
-use crate::tag;
+use alloc::boxed::Box;
 
-pub use rasn_derive::AsnType;
+pub use ::{
+    alloc::string::String as Utf8String, bytes::Bytes as OctetString,
+    num_bigint::BigInt as Integer, rasn_derive::AsnType,
+};
 
-pub use alloc::string::String as Utf8String;
-pub use bytes::Bytes as OctetString;
-pub use num_bigint::BigInt as Integer;
-
-pub use instance::InstanceOf;
-pub use oid::ObjectIdentifier;
-pub use open::Open;
-pub use super::tag::{Tag, Class};
+pub use self::{
+    instance::InstanceOf,
+    oid::{ConstOid, ObjectIdentifier, Oid},
+    open::Open,
+    prefix::{Explicit, Implicit},
+    tag::{Class, Tag, TagTree},
+};
 
 ///  Alias for `bitvec::BitVec` mapped to ASN.1'a `BIT STRING`.
 pub type BitString = bitvec::vec::BitVec<bitvec::order::Msb0, u8>;
@@ -30,9 +34,7 @@ pub type PrintableString = Implicit<tag::PRINTABLE_STRING, Utf8String>;
 pub type VisibleString = Implicit<tag::VISIBLE_STRING, Utf8String>;
 ///  `String` alias that matches `BmpString` BER's encoding rules.
 pub type BmpString = Implicit<tag::BMP_STRING, Utf8String>;
-///  Alias to `Vec<T>`.
-pub type SequenceOf<T> = alloc::vec::Vec<T>;
-///  Alias to `Vec<T>`.
+///  Alias to `alloc::collections::BTreeSet<T>`.
 pub type SetOf<T> = alloc::collections::BTreeSet<T>;
 ///  `UniversalString` string alias that matches BER's encoding rules.
 pub type UniversalString = Implicit<tag::UNIVERSAL_STRING, Utf8String>;
@@ -44,60 +46,15 @@ pub type GeneralizedTime = chrono::DateTime<chrono::FixedOffset>;
 /// A trait representing any type that can represented in ASN.1.
 pub trait AsnType {
     /// The associated tag for the type.
+    ///
+    /// **Note** When implementing CHOICE types, this should be set to
+    /// [`Tag::EOC`] and instead set the [`Self::TAG_TREE`] constant to contain
+    /// all variants.
     const TAG: Tag;
+    /// The root of this type's tree of tag's if it a CHOICE type, otherwise its
+    /// `Leaf` that points [`Self::TAG`].
+    const TAG_TREE: TagTree = TagTree::Leaf(Self::TAG);
 }
-
-/// A newtype wrapper that will explicitly tag its value with `T`'s tag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Explicit<T, V>{
-    _tag: core::marker::PhantomData<T>,
-    pub(crate) value: V,
-}
-
-/// A newtype wrapper that will implicitly tag its value with `T`'s tag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Implicit<T, V>{
-    _tag: core::marker::PhantomData<T>,
-    pub(crate) value: V,
-}
-
-macro_rules! tag_kind {
-    ($($name:ident),+) => {
-        $(
-
-            impl<T, V> $name<T, V>{
-                pub fn new(value: V) -> Self {
-                    Self {
-                        value,
-                        _tag: core::marker::PhantomData,
-                    }
-                }
-            }
-
-            impl<T, V> From<V> for $name<T, V> {
-                fn from(value: V) -> Self {
-                    Self::new(value)
-                }
-            }
-
-            impl<T, V> core::ops::Deref for $name<T, V> {
-                type Target = V;
-
-                fn deref(&self) -> &Self::Target {
-                    &self.value
-                }
-            }
-
-            impl<T, V> core::ops::DerefMut for $name<T, V> {
-                fn deref_mut(&mut self) -> &mut Self::Target {
-                    &mut self.value
-                }
-            }
-        )+
-    }
-}
-
-tag_kind!(Implicit, Explicit);
 
 macro_rules! asn_type {
     ($($name:ty: $value:ident),+) => {
@@ -126,6 +83,8 @@ asn_type! {
     Integer: INTEGER,
     OctetString: OCTET_STRING,
     ObjectIdentifier: OBJECT_IDENTIFIER,
+    Oid: OBJECT_IDENTIFIER,
+    ConstOid: OBJECT_IDENTIFIER,
     BitString: BIT_STRING,
     Utf8String: UTF8_STRING,
     UtcTime: UTC_TIME,
@@ -135,30 +94,26 @@ asn_type! {
 
 }
 
-impl<T: AsnType> AsnType for Option<T> {
+impl<T: AsnType> AsnType for Box<T> {
     const TAG: Tag = T::TAG;
 }
 
-impl<T> AsnType for SequenceOf<T> {
+impl<T: AsnType> AsnType for alloc::vec::Vec<T> {
     const TAG: Tag = Tag::SEQUENCE;
+}
+
+impl<T: AsnType> AsnType for Option<T> {
+    const TAG: Tag = T::TAG;
 }
 
 impl<T> AsnType for SetOf<T> {
     const TAG: Tag = Tag::SET;
 }
 
-impl<T> AsnType for &'_ [T] {
+impl<T: AsnType, const N: usize> AsnType for [T; N] {
     const TAG: Tag = Tag::SEQUENCE;
 }
 
-impl<T: AsnType, V> AsnType for Implicit<T, V> {
-    const TAG: Tag = T::TAG;
-}
-
-impl<T: AsnType, V> AsnType for Explicit<T, V> {
-    const TAG: Tag = T::TAG;
-}
-
-impl<K, V> AsnType for alloc::collections::BTreeMap<K, V> {
+impl<T> AsnType for &'_ [T] {
     const TAG: Tag = Tag::SEQUENCE;
 }

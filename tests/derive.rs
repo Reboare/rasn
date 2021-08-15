@@ -41,7 +41,6 @@ fn choice() {
 
     #[derive(AsnType, Clone, Debug, Encode, Decode, PartialEq)]
     struct ChoiceField {
-        #[rasn(choice)]
         choice: VecChoice,
     }
 
@@ -99,11 +98,13 @@ enum NestedAnonChoiceStruct {
 }
 
 #[test]
-fn automatic_tagging() {
+fn automatic_tags() {
     #[derive(AsnType, Debug, Default, Decode, Encode, PartialEq)]
-    #[rasn(automatic_tagging)]
+    #[rasn(automatic_tags)]
     struct Bools {
+        #[rasn(default)]
         a: bool,
+        #[rasn(default)]
         b: bool,
     }
 
@@ -116,4 +117,18 @@ fn automatic_tagging() {
 
     let default = Bools { a: true, b: false };
     assert_eq!(default, ber::decode(&raw).unwrap());
+}
+
+#[test]
+fn list_in_single_attr() {
+    #[derive(AsnType, Debug, Default, Decode, Encode, PartialEq)]
+    #[rasn(delegate, tag(context, 0))]
+    struct Foo(u8);
+
+    #[derive(AsnType, Debug, Default, Decode, Encode, PartialEq)]
+    #[rasn(delegate)]
+    pub struct Bar(pub u8);
+
+    assert_eq!(Foo::TAG, Tag::new(Class::Context, 0));
+    assert_eq!(Bar::TAG, Integer::TAG);
 }

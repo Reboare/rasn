@@ -6,8 +6,7 @@ use num_traits::ToPrimitive;
 use super::{error, DecoderOptions};
 use crate::{
     ber::identifier::Identifier,
-    tag::{Class, Tag},
-    types::Integer,
+    types::{Class, Integer, Tag},
 };
 
 pub(crate) fn parse_value<'config, 'input>(
@@ -99,6 +98,20 @@ pub fn parse_encoded_number(input: &[u8]) -> IResult<&[u8], Integer> {
     Ok((input, concat_number(body, end[0])))
 }
 
+pub fn parse_base128_number(input: &[u8]) -> IResult<&[u8], Integer> {
+    let (input, body) = nom::bytes::streaming::take_while(|i| i & 0x80 != 0)(input)?;
+    let (input, end) = nom::bytes::streaming::take(1usize)(input)?;
+
+    let mut number = Integer::from(0);
+    for byte in body.iter() {
+        number <<= 7usize;
+        number |= Integer::from(byte & 0x7F);
+    }
+    number <<= 7usize;
+    number |= Integer::from(end[0]);
+    Ok((input, number))
+}
+
 fn parse_initial_octet(input: &[u8]) -> IResult<&[u8], Identifier> {
     let (input, octet) = nom::bytes::streaming::take(1usize)(input)?;
     let initial_octet = octet[0];
@@ -121,7 +134,10 @@ pub(crate) fn parse_contents<'input, 'config>(
     if length == 0x80 {
         if identifier.is_primitive() || !config.encoding_rules.allows_indefinite() {
             nom::error::context("Indefinite length not allowed", |_| {
-                Err(nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Tag)))
+                Err(nom::Err::Failure(nom::error::Error::new(
+                    input,
+                    nom::error::ErrorKind::Tag,
+                )))
             })(input)
         } else {
             Ok((input, None))
@@ -176,7 +192,10 @@ fn take_contents<'config, 'input>(
 ) -> IResult<&'input [u8], &'input [u8]> {
     match length {
         0xff => nom::error::context("Reserved Length Octet found.", |_| {
-            Err(nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Tag)))
+            Err(nom::Err::Failure(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Tag,
+            )))
         })(input),
         0 => Ok((input, &[])),
         1..=0x7f => nom::bytes::streaming::take(length)(input),
@@ -189,7 +208,10 @@ fn take_contents<'config, 'input>(
                 nom::bytes::streaming::take(length)(input)
             } else {
                 nom::error::context("Length longer than possible capacity.", |_| {
-                    Err(nom::Err::Failure(nom::error::Error::new(input, nom::error::ErrorKind::Tag)))
+                    Err(nom::Err::Failure(nom::error::Error::new(
+                        input,
+                        nom::error::ErrorKind::Tag,
+                    )))
                 })(input)
             }
         }
