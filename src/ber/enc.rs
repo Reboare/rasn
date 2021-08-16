@@ -309,7 +309,7 @@ impl crate::Encoder for Encoder {
         let mut encoder = Self::new(self.config);
         value.encode(&mut encoder)?;
 
-        Ok(self.encode_value(tag, &encoder.output))
+        Ok(self.encode_constructed(tag, &encoder.output))
     }
 
     fn encode_sequence<F>(&mut self, tag: Tag, encoder_scope: F) -> Result<Self::Ok, Self::Error>
